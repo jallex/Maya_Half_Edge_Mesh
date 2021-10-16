@@ -1,3 +1,4 @@
+
 import maya.api.OpenMaya as OpenMaya
 
 #Classes and methods representing the half edge data structure
@@ -90,6 +91,11 @@ heMesh = HalfEdgeMesh(he2_twin)
 
 #Convert half-mesh data structure example into Maya mesh
 def heMesh_to_maya(heMesh):
+    """
+    Convert the given half edge mesh to a Maya mesh object 
+
+    :param HalfEdgeMesh heMesh: The half edge mesh.
+    """
     #List of vertices in mesh
     vertice_list = []
     #List of vertice ID's 
@@ -157,5 +163,44 @@ def heMesh_to_maya(heMesh):
     # create the mesh
     meshFn.create(vertices, polygonFaces, polygonConnects )
 
-#Call function
-heMesh_to_maya(heMesh)
+def maya_to_heMesh():
+    """
+
+    Convert the selected object in Maya to a half edge mesh.
+    
+    :returns: :class:'HalfEdgeMesh' the selected object as a half edge mesh data structure.
+    """
+    #get first selected object
+    selected_object = OpenMaya.MGlobal.getActiveSelectionList(0)
+    dag = selected_object.getDagPath(0)
+    print(dag)
+    mesh = OpenMaya.MFnMesh(dag)
+    print(mesh)
+    poly = OpenMaya.MItMeshPolygon(dag)
+    print(poly)
+    visited = set([0])
+
+    half_edge1 = HalfEdge()
+
+    while not poly.isDone():
+        # examples of selecting verts/edges/faces by index from object
+
+        #cmds.select( str(selected_object)[2:-2] + '.vtx[' + str(0) + ']' )
+        #cmds.select( str(selected_object)[2:-2] + '.e[' + str(0) + ']' )
+        #cmds.select( str(selected_object)[2:-2] + '.f[' + str(0) + ']' )
+        current = poly.index()
+        vertices = mesh.getPolygonVertices(current)
+        connected_faces = poly.getConnectedFaces()
+        for face in connected_faces:
+            if (face in visited):
+                continue
+            visited.add(face)
+            print("face", face)
+            face_verts = mesh.getPolygonVertices(face)
+            vert_count = len(face_verts)
+            for vert in range(vert_count):
+                print("vert", vert)
+        poly.next()
+                       
+#heMesh_to_maya(heMesh)
+maya_to_heMesh()
