@@ -202,5 +202,5 @@ def maya_to_heMesh():
                 print("vert", vert)
         poly.next()
                        
-#heMesh_to_maya(heMesh)
-maya_to_heMesh()
+heMesh_to_maya(heMesh)
+#maya_to_heMesh()
