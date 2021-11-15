@@ -5,5 +5,7 @@ Behind the scenes, Maya uses the half edge mesh data structure for heavy computa
 
 # How to Use
 1. Download script or paste it into Maya's script editor
-2. Run script
-3. Convert between Half-edge mesh data structures and Maya mesh objects in Maya's 3D editor
+2. Select a Mesh object to convert to half edge mesh
+3. Run script
+4. Convert between Half-edge mesh data structures and Maya mesh objects in Maya's 3D editor
+5. Ability to edge collapse
