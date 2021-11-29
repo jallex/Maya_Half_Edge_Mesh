@@ -1,5 +1,133 @@
 import maya.api.OpenMaya as OpenMaya
 
+# Instructions: to start tool, navigate to execute_tool.py and run the file
+
+from PySide2.QtCore import * 
+from PySide2.QtGui import *
+from PySide2.QtUiTools import *
+from PySide2.QtWidgets import *
+from functools import partial
+import maya.cmds as cmds
+from maya import OpenMayaUI
+from pathlib import Path
+from shiboken2 import wrapInstance
+
+class CurrentPM:
+    def __init__(self):
+        self.object = None
+        
+#show gui window
+def showWindow():
+    # get this files location so we can find the .ui file in the /ui/ folder alongside it
+    UI_FILE = str(Path(__file__).parent.resolve() / "pm_ui.ui")
+    loader = QUiLoader()
+    file = QFile(UI_FILE)
+    file.open(QFile.ReadOnly)
+     
+    #Get Maya main window to parent gui window to it
+    mayaMainWindowPtr = OpenMayaUI.MQtUtil.mainWindow()
+    mayaMainWindow = wrapInstance(int(mayaMainWindowPtr), QWidget)
+    ui = loader.load(file, parentWidget=mayaMainWindow)
+    file.close()
+    
+    ui.setParent(mayaMainWindow)
+    ui.setWindowFlags(Qt.Window)
+    ui.setWindowTitle('Progressive Mesh')
+    ui.setObjectName('Progressive Mesh')
+    ui.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+
+    this_PM = CurrentPM()
+
+#Close dialog
+    def spinbox_changed(num_edges_requested):
+        he_data = maya_to_heMesh(this_PM.object)
+
+        current_num_edges = he_data.num_edges
+        this_he = he_data.halfEdge 
+        count = 0
+
+        #print("current_num_edges", current_num_edges)
+        #print("num_edges_requested", num_edges_requested)
+        if(current_num_edges > num_edges_requested):
+            # Reduce edges with edge collapse
+            difference = current_num_edges - num_edges_requested
+            #must reduce by a multiple of 3
+            if difference % 3 == 0:
+                new_he = reduce_many_he(this_he, difference, current_num_edges)
+                heMesh_to_maya(new_he)
+            else:
+                difference = difference + (3 - (difference % 3))
+                ui.spinBox_num_edges.setValue(current_num_edges - difference)
+            #ui.spinBox_num_edges.setMaximum(new_he.num_edges)
+
+        # hack-y way of finding a half edge with a twin
+        while(True):
+            if not this_he.twin == None:
+                new_he =  this_he
+                break
+            else:
+                this_he = this_he.next
+            if count >=5:
+                new_he = this_he
+                break
+
+        if(current_num_edges < num_edges_requested):
+            # Increase edges with vertex split
+            pass
+
+        if not (ui.spinBox_num_edges.value() == ui.horizontalSlider_num_edges.value()):
+            # Update horizontal slider
+            ui.horizontalSlider_num_edges.setValue(new_he.num_edges)
+        pass
+
+    def slider_released():
+        if not (ui.spinBox_num_edges.value() == ui.horizontalSlider_num_edges.value()):
+            ui.spinBox_num_edges.setValue(ui.horizontalSlider_num_edges.value())
+        #ui.horizontalSlider_num_edges.setMaximum(he_data.num_edges)
+
+    def slider_changed(num_edges_requested):
+        #ui.spinBox_num_edges.setValue(ui.horizontalSlider_num_edges.value())
+        pass
+
+    def set_selected_button_pressed():
+        #get selected object
+        selected_object = OpenMaya.MGlobal.getActiveSelectionList(0)
+        he_data = maya_to_heMesh(selected_object)
+        this_PM.object = he_data
+
+        #Update number of edges on slider and dialog to be the max
+        ui.horizontalSlider_num_edges.setMaximum(he_data.num_edges)
+        ui.spinBox_num_edges.setMaximum(he_data.num_edges)
+        ui.horizontalSlider_num_edges.setValue(he_data.num_edges)
+        ui.spinBox_num_edges.setValue(he_data.num_edges)
+
+        #Update text on UI for object name
+        selected = cmds.ls(sl=True,long=True) or []
+        if not(len(selected) == 1):
+            print("Please set center to be exactly 1 selected object.")
+        else: 
+            selected_name = selected[0]
+        
+        text = "Selected Mesh: " + (str(selected_name[1:]))
+        #change ui text
+        ui.selected_mesh_text.setText(text)
+
+    #connect buttons to functions
+    ui.spinBox_num_edges.valueChanged.connect(partial(spinbox_changed))
+    #reduce 3 edges at a time with one edge collapse
+    #ui.spinBox.setSingleStep(3)
+    ui.horizontalSlider_num_edges.sliderReleased.connect(partial(slider_released))
+    ui.horizontalSlider_num_edges.valueChanged.connect(partial(slider_changed))
+    #ui.horizontalSlider_num_edges.setSingleStep(3)
+    ui.select_button.clicked.connect(partial(set_selected_button_pressed))
+     
+    # show the QT ui
+    ui.show()
+    return ui
+
+if __name__ == "__main__":
+    window=showWindow()
+
 #Classes and methods representing the half edge data structure
 
 #Vertex data
@@ -61,21 +189,34 @@ class HalfEdge:
 class HalfEdgeMesh:
   def __init__(self, halfEdge):
       self.halfEdge = halfEdge
+      self.last_mesh = None
+      self.num_edges = None
 
-#Reduce multiple edges, number of edges to reduce specified by number_edges param
-def reduce_many_he(he, number_edges):
+#Reduce multiple edges, number of edges to reduce specified by num_edges param
+def reduce_many_he(he, num_edges, current_edges):
     count = 0
+    old_he = he
+
+    #ensure we have enough edges to reduce
+    if num_edges >= current_edges:
+        num_edges = current_edges - 1
+        
     while(True):
         if not he.twin == None:
-            reduce_he(he.twin)
-            count += 1
+            he = reduce_he(he.twin)
+            count += 3
         elif not he.next.twin.next == None: 
-            reduce_he(he.next.twin.next)
-            count += 1
-        if count == number_edges:
+            he = reduce_he(he.next.twin.next)
+            count += 3
+        if count >= num_edges:
+            print("reduced ", count, "edges")
             break
+    new_he_mesh = HalfEdgeMesh(he)
+    new_he_mesh.last_mesh = HalfEdgeMesh(old_he)
+    new_he_mesh.num_edges = current_edges - count
+    return new_he_mesh
 
-#Reduce one given half edge
+#Reduce one given half edge using edge collapse
 def reduce_he(halfedge):
    """
  
@@ -129,10 +270,8 @@ def reduce_he(halfedge):
 
    #iterate around verts to change references to previous vert
    for e in twins:
-       if not (e.vert.id == vert1_id or e.vert.id == vert2_id):
-           twins.remove(e)
-       else:
-            e.vert = new_vertex
+       if (e.vert.id == vert1_id or e.vert.id == vert2_id):
+           e.vert = new_vertex
 
 #    Attempt at updating verts only in surrounding area, as opposed to checking whole mesh
 #    for e in twins:
@@ -191,16 +330,17 @@ def reduce_he(halfedge):
            #reached start
            if(he.id == start_he.id):
                break
+   #print("num_edges after one reduce", len(seen_set)/2)
+   #new_hemesh = HalfEdgeMesh(he)
+   return he
 
-   new_hemesh = HalfEdgeMesh(he)
-   return new_hemesh
-
-def maya_to_heMesh():
+def maya_to_heMesh(selected_object):
   """
   Convert the selected object in Maya to a half edge mesh.
    :returns: :class:'HalfEdgeMesh' the selected object as a half edge mesh data structure.
   """
   #get first selected object
+  #selected_object = OpenMaya.MGlobal.getActiveSelectionList(0)
   selected_object = OpenMaya.MGlobal.getActiveSelectionList(0)
   dag = selected_object.getDagPath(0)
   poly = OpenMaya.MItMeshPolygon(dag)
@@ -286,6 +426,8 @@ def maya_to_heMesh():
           edges_seen[half_edge.edge.id] = half_edge.id
   #Create Half Edge Mesh
   half_edge_mesh = HalfEdgeMesh(half_edge_list[0])
+  # print("edges according to HE list", len(half_edge_list) / 2)
+  half_edge_mesh.num_edges = len(half_edge_list) / 2
 
 #   print("HALF EDGE DATA")
 #   for index, half_edge in enumerate(half_edge_list):
@@ -301,7 +443,16 @@ def maya_to_heMesh():
 #       print("verts", half_edge.edge.vert1, half_edge.edge.vert2)
 #       print("\n")
 
+  # delete selected object
+  #cmds.delete()
   return half_edge_mesh
+
+
+def not_seen_face(v1, v2, v3, seen):
+   for face in seen:
+       if v1 in face and v2 in face and v3 in face:
+           return False
+   return True
 
 #Convert half-mesh data structure example into Maya mesh
 def heMesh_to_maya(heMesh):
@@ -350,12 +501,14 @@ def heMesh_to_maya(heMesh):
  
            #add all vertices in this face
            if(len(verts_temp) == 3):
-               polyConnects.append(verts_temp[0])
-               polyConnects.append(verts_temp[1])
-               polyConnects.append(verts_temp[2])
-               seen_faces.append([verts_temp[0], verts_temp[1], verts_temp[2]])
+               #ensure this face hasn't been previously added 
+               if not_seen_face(verts_temp[0], verts_temp[1], verts_temp[2], seen_faces):
+                   polyConnects.append(verts_temp[0])
+                   polyConnects.append(verts_temp[1])
+                   polyConnects.append(verts_temp[2])
+                   seen_faces.append([verts_temp[0], verts_temp[1], verts_temp[2]])
+                   face_count += 1
                verts_temp = []
-               face_count += 1
  
            #find other faces to traverse around
            if not he.twin == None:
@@ -379,29 +532,56 @@ def heMesh_to_maya(heMesh):
   # Mesh has face_count # of faces of 3 vertices each
   # hardcoded triangle
   polygonFaces = [3] * face_count
+
+#   print("FACES", face_count)
+#   print("vertice_list count", len(vertice_list))
+#   print("FINAL EDGE COUNT", len(seen_set) / 2)
+
   # list of vertex indices that make the
   # the polygons in our mesh
   polygonConnects = polyConnects
   # create the mesh
-  # print("vertices", vertices)
-  # print("polygonFaces", polygonFaces)
+
+#   print("vertices", vertices)
+#   print("polygonFaces", polygonFaces)
 #   print("polygonConnects", polygonConnects)
 #   print("len poly connects", len(polygonConnects))
-  meshFn.create(vertices, polygonFaces, polygonConnects )
 
-he_data = maya_to_heMesh()
-this_he = he_data.halfEdge 
-count = 0
-while(True):
-    if not this_he.twin == None:
-        new_he =  this_he
-        break
-    else:
-        this_he = this_he.next
-    if count >=5:
-        new_he = this_he
-        break
+  new_mesh_object = meshFn.create(vertices, polygonFaces, polygonConnects )
+  depNode = OpenMaya.MFnDependencyNode(new_mesh_object)
+  #Set name of new object
+  depNode.setName("Reduced_Object")
+  #Get name of new object
+  this_name = depNode.name()
+  #get currently selected object
+  selected = cmds.ls(sl=True,long=True) or []
+  sel = cmds.ls(this_name, l=True)
+  cmds.sets(sel, e=True, forceElement='initialShadingGroup')
+  cmds.select( this_name )
+  #fix normals near hard edges
+  cmds.polySoftEdge( a=30 )
+  #clear selection
+  cmds.select(clear=True)
+  #hide all objects
+  cmds.hide(allObjects=True)
+  #unhide latest created mesh so that it's the only one visible
+  cmds.showHidden( this_name )
+  #Select the original
+  cmds.select( selected )
 
-new_he = reduce_he(this_he)
-print("Collapsed one edge")
-heMesh_to_maya(new_he)
+# he_data = maya_to_heMesh()
+# this_he = he_data.halfEdge 
+# count = 0
+# while(True):
+#     if not this_he.twin == None:
+#         new_he =  this_he
+#         break
+#     else:
+#         this_he = this_he.next
+#     if count >=5:
+#         new_he = this_he
+#         break
+
+#new_he = reduce_he(this_he)
+# new_he = reduce_many_he(this_he, 4)
+# heMesh_to_maya(new_he)
